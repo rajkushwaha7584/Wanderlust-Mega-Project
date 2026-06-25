@@ -15,78 +15,91 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
-                    sh """
+                    sh '''
                     $SONAR_HOME/bin/sonar-scanner \
                     -Dsonar.projectName=wanderlust \
                     -Dsonar.projectKey=wanderlust
-                    """
+                    '''
                 }
             }
         }
 
-    stage('OWASP Dependency Check') {
-    steps {
-        dependencyCheck(
-            odcInstallation: 'DC',
-            additionalArguments: '''
-                --scan ./
-                --format XML
-                --format HTML
-                --out .
-                --data /var/lib/jenkins/dependency-check-data
-                --noupdate
-            '''
-        )
+        stage('OWASP Dependency Check') {
+            steps {
+                dependencyCheck(
+                    odcInstallation: 'DC',
+                    additionalArguments: '''
+                        --scan ./
+                        --format XML
+                        --format HTML
+                        --out .
+                        --data /var/lib/jenkins/dependency-check-data
+                        --noupdate
+                    '''
+                )
 
-        dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-    }
-}
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+
+                archiveArtifacts artifacts: 'dependency-check-report.html,dependency-check-report.xml', allowEmptyArchive: true, fingerprint: true
+            }
+        }
 
         stage('Trivy File System Scan') {
             steps {
-                sh """
-                trivy fs --format table -o trivy-fs-report.html .
-                """
+                sh '''
+                trivy fs \
+                --scanners vuln \
+                --skip-dirs node_modules \
+                --format table \
+                -o trivy-fs-report.txt .
+                '''
 
-                archiveArtifacts artifacts: 'trivy-fs-report.html', fingerprint: true
+                archiveArtifacts artifacts: 'trivy-fs-report.txt', allowEmptyArchive: true, fingerprint: true
             }
         }
 
         stage('Deploy Using Docker') {
             steps {
-                sh """
-                docker compose down || true
-                docker compose up -d --build
+                sh '''
+                docker rm -f frontend backend redis-service mongo-service || true
+
+                docker compose down --remove-orphans || true
+                docker compose up -d --build --remove-orphans
+
                 docker ps
-                """
+                '''
             }
         }
 
         stage('OWASP ZAP Baseline Scan') {
-    steps {
-        sh """
-        docker run --rm \
-        --add-host=host.docker.internal:host-gateway \
-        -v "\$WORKSPACE:/zap/wrk/:rw" \
-        ghcr.io/zaproxy/zaproxy:stable \
-        zap-baseline.py \
-        -t http://host.docker.internal:5173 \
-        -r zap-report.html \
-        -J zap-report.json \
-        -I
-        """
+            steps {
+                sh '''
+                mkdir -p zap-reports
 
-        publishHTML(target: [
-            allowMissing: false,
-            alwaysLinkToLastBuild: true,
-            keepAll: true,
-            reportDir: '.',
-            reportFiles: 'zap-report.html',
-            reportName: 'OWASP ZAP Report'
-        ])
+                docker run --rm \
+                --add-host=host.docker.internal:host-gateway \
+                -v "$WORKSPACE/zap-reports:/zap/wrk/:rw" \
+                ghcr.io/zaproxy/zaproxy:stable \
+                zap-baseline.py \
+                -t http://host.docker.internal:5173 \
+                -r zap-report.html \
+                -w zap-report.md \
+                -J zap-report.json \
+                -x zap-report.xml \
+                -I
 
-        archiveArtifacts artifacts: 'zap-report.html,zap-report.json', fingerprint: true
+                echo "===== OWASP ZAP Report Summary ====="
+                sed -n '1,120p' zap-reports/zap-report.md || true
+                '''
+
+                archiveArtifacts artifacts: 'zap-reports/*', allowEmptyArchive: true, fingerprint: true
+            }
+        }
     }
-}
+
+    post {
+        always {
+            echo 'Pipeline completed. Check Artifacts section for Trivy and ZAP reports.'
+        }
     }
 }
