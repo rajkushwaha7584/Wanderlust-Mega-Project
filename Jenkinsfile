@@ -48,7 +48,7 @@ pipeline {
                 trivy fs --format table -o trivy-fs-report.html .
                 """
 
-               // archiveArtifacts artifacts: 'trivy-fs-report.html', fingerprint: true
+                archiveArtifacts artifacts: 'trivy-fs-report.html', fingerprint: true
             }
         }
 
