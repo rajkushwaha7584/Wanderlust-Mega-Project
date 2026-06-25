@@ -61,5 +61,32 @@ pipeline {
                 """
             }
         }
+
+        stage('OWASP ZAP Baseline Scan') {
+    steps {
+        sh """
+        docker run --rm \
+        --add-host=host.docker.internal:host-gateway \
+        -v "\$WORKSPACE:/zap/wrk/:rw" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-baseline.py \
+        -t http://host.docker.internal:5173 \
+        -r zap-report.html \
+        -J zap-report.json \
+        -I
+        """
+
+        publishHTML(target: [
+            allowMissing: false,
+            alwaysLinkToLastBuild: true,
+            keepAll: true,
+            reportDir: '.',
+            reportFiles: 'zap-report.html',
+            reportName: 'OWASP ZAP Report'
+        ])
+
+        archiveArtifacts artifacts: 'zap-report.html,zap-report.json', fingerprint: true
+    }
+}
     }
 }
